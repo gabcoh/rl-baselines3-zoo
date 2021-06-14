@@ -3,14 +3,51 @@ import tempfile
 import time
 from copy import deepcopy
 from threading import Thread
-from typing import Optional
+from typing import Optional, Any, Dict
 
+import torch as th
 import optuna
 from sb3_contrib import TQC
 from stable_baselines3 import SAC
 from stable_baselines3.common.callbacks import BaseCallback, EvalCallback
 from stable_baselines3.common.vec_env import VecEnv
+from stable_baselines3.common.logger import Video
+from stable_baselines3.common.evaluation import evaluate_policy
 
+
+class VideoEvalCallback(EvalCallback):
+    """
+    Callback used for saving a video of eval epsiodes
+    """
+    def _on_step(self) -> bool:
+        if self.n_calls % self.eval_freq == 0:
+            screens = []
+
+            def grab_screens(_locals: Dict[str, Any], _globals: Dict[str, Any]) -> None:
+                """
+                Renders the environment in its current state, recording the screen in the captured `screens` list
+
+                :param _locals: A dictionary containing all local variables of the callback's scope
+                :param _globals: A dictionary containing all global variables of the callback's scope
+                """
+                screen = self.eval_env.render(mode="rgb_array")
+                # PyTorch uses CxHxW vs HxWxC gym (and tensorflow) image convention
+                screens.append(screen.transpose(2, 0, 1).copy())
+
+            evaluate_policy(
+                self.model,
+                self.eval_env,
+                callback=grab_screens,
+                n_eval_episodes=self.n_eval_episodes,
+                deterministic=self.deterministic,
+            )
+            self.logger.record(
+                "trajectory/video",
+                Video(th.ByteTensor([screens]), fps=40),
+                exclude=("stdout", "log", "json", "csv"),
+            )
+
+        return super(VideoEvalCallback, self)._on_step()
 
 class TrialEvalCallback(EvalCallback):
     """
